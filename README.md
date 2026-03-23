@@ -4,8 +4,7 @@ A hand gesture based control system for QGIS navigation built with Python.
 
 This project explores gesture based interaction as an alternative input method for GIS workflows, with a focus on usability, stability, and real-world testing inside QGIS. The application runs without displaying the live camera feed. While it is active, a small red REC indicator is visible in the system tray, signaling that the webcam is in use. The session can be closed at any time through the tray menu by selecting "End session".
 
-Make sure your webcam lid is open and QGIS is running before starting the application. If QGIS is not open, nothing critical will happen, and some features will still work at the OS level.
----
+Make sure your webcam lid is open and QGIS is running before starting the application. If QGIS is not open, nothing critical will happen, and some features will still work at the OS level.---
 
 ## Features
 
