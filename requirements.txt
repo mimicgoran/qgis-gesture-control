@@ -1,4 +1,6 @@
 opencv-python>=4.8
 mediapipe>=0.10
 pyautogui>=0.9
+pystray>=0.19
+Pillow>=9.0
 
