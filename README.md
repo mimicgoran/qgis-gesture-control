@@ -47,7 +47,6 @@ The current implementation operates at the OS level, allowing fast testing and v
 
 ## Installation
 
-```bash
 pip install -r requirements.txt
 
 ## Usage
