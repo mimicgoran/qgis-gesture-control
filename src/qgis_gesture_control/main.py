@@ -1,7 +1,12 @@
 import cv2
 import mediapipe as mp
 import math
+import time
+import threading
 import pyautogui
+import pystray
+from pystray import MenuItem as item
+from PIL import Image, ImageDraw
 
 from gesture_utils import (
     get_two_hand_distance,
@@ -48,6 +53,10 @@ pyautogui.PAUSE = 0
 mp_hands = mp.solutions.hands
 mp_drawing = mp.solutions.drawing_utils
 mp_drawing_styles = mp.solutions.drawing_styles
+
+SHOW_CAMERA = False
+RUNNING = True
+tray_icon = None
 
 
 def reset_zoom_state(state):
@@ -302,447 +311,492 @@ def prime_zoom_target(screen_center_x, screen_center_y):
     pyautogui.moveTo(screen_center_x, screen_center_y, duration=0)
 
 
+def create_tray_image():
+    image = Image.new("RGB", (64, 64), "black")
+    draw = ImageDraw.Draw(image)
+    draw.ellipse((16, 16, 48, 48), fill="red")
+    draw.text((14, 2), "REC", fill="white")
+    return image
+
+
+def stop_session(icon=None, menu_item=None):
+    global RUNNING
+    RUNNING = False
+
+    if icon is not None:
+        try:
+            icon.stop()
+        except Exception:
+            pass
+
+
+def run_tray_icon():
+    global tray_icon
+
+    tray_icon = pystray.Icon(
+        "gesture_camera_active",
+        create_tray_image(),
+        "Camera active",
+        menu=pystray.Menu(
+            item("End session", stop_session)
+        ),
+    )
+    tray_icon.run()
+
+
 def main():
+    global RUNNING
+
     cap = cv2.VideoCapture(0)
     state = create_state()
     ensure_extra_state(state)
+
+    RUNNING = True
+    threading.Thread(target=run_tray_icon, daemon=True).start()
 
     screen_w, screen_h = pyautogui.size()
     screen_center_x = screen_w // 2
     screen_center_y = screen_h // 2
 
-    with mp_hands.Hands(
-        static_image_mode=False,
-        max_num_hands=2,
-        model_complexity=1,
-        min_detection_confidence=0.6,
-        min_tracking_confidence=0.6,
-    ) as hands:
-        while cap.isOpened():
-            success, frame = cap.read()
-            if not success:
-                print("Ne mogu da procitam frame sa kamere.")
-                break
+    try:
+        with mp_hands.Hands(
+            static_image_mode=False,
+            max_num_hands=2,
+            model_complexity=1,
+            min_detection_confidence=0.6,
+            min_tracking_confidence=0.6,
+        ) as hands:
+            while cap.isOpened() and RUNNING:
+                success, frame = cap.read()
+                if not success:
+                    print("Ne mogu da procitam frame sa kamere.")
+                    break
 
-            state["frame_index"] += 1
+                state["frame_index"] += 1
 
-            if state["click_cooldown"] > 0:
-                state["click_cooldown"] -= 1
+                if state["click_cooldown"] > 0:
+                    state["click_cooldown"] -= 1
 
-            if state["click_flash_frames"] > 0:
-                state["click_flash_frames"] -= 1
+                if state["click_flash_frames"] > 0:
+                    state["click_flash_frames"] -= 1
 
-            if state["scroll_cooldown"] > 0:
-                state["scroll_cooldown"] -= 1
+                if state["scroll_cooldown"] > 0:
+                    state["scroll_cooldown"] -= 1
 
-            frame = cv2.flip(frame, 1)
-            h, w, _ = frame.shape
+                frame = cv2.flip(frame, 1)
+                h, w, _ = frame.shape
 
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            results = hands.process(rgb)
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                results = hands.process(rgb)
 
-            detected_hands = []
+                detected_hands = []
 
-            if results.multi_hand_landmarks:
-                for idx, hand_landmarks in enumerate(results.multi_hand_landmarks):
-                    handedness_label = "Unknown"
+                if results.multi_hand_landmarks:
+                    for idx, hand_landmarks in enumerate(results.multi_hand_landmarks):
+                        handedness_label = "Unknown"
 
-                    if results.multi_handedness and idx < len(results.multi_handedness):
-                        handedness_label = results.multi_handedness[idx].classification[0].label
+                        if results.multi_handedness and idx < len(results.multi_handedness):
+                            handedness_label = results.multi_handedness[idx].classification[0].label
 
-                    detected_hands.append(
-                        {
-                            "landmarks": hand_landmarks,
-                            "label": handedness_label,
-                        }
-                    )
+                        detected_hands.append(
+                            {
+                                "landmarks": hand_landmarks,
+                                "label": handedness_label,
+                            }
+                        )
 
-                    mp_drawing.draw_landmarks(
-                        frame,
-                        hand_landmarks,
-                        mp_hands.HAND_CONNECTIONS,
-                        mp_drawing_styles.get_default_hand_landmarks_style(),
-                        mp_drawing_styles.get_default_hand_connections_style(),
-                    )
+                        mp_drawing.draw_landmarks(
+                            frame,
+                            hand_landmarks,
+                            mp_hands.HAND_CONNECTIONS,
+                            mp_drawing_styles.get_default_hand_landmarks_style(),
+                            mp_drawing_styles.get_default_hand_connections_style(),
+                        )
 
-                    wrist = hand_landmarks.landmark[0]
-                    wrist_x = int(wrist.x * w)
-                    wrist_y = int(wrist.y * h)
+                        wrist = hand_landmarks.landmark[0]
+                        wrist_x = int(wrist.x * w)
+                        wrist_y = int(wrist.y * h)
 
-                    cv2.putText(
-                        frame,
-                        handedness_label,
-                        (wrist_x, wrist_y - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.7,
-                        (0, 255, 255),
-                        2,
-                    )
+                        cv2.putText(
+                            frame,
+                            handedness_label,
+                            (wrist_x, wrist_y - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.7,
+                            (0, 255, 255),
+                            2,
+                        )
 
-            hand_count = len(detected_hands)
+                hand_count = len(detected_hands)
 
-            box_x1, box_y1, box_x2, box_y2 = draw_test_box(frame, state)
+                box_x1, box_y1, box_x2, box_y2 = draw_test_box(frame, state)
 
-            if hand_count == 2:
-                reset_pointer_state(state)
-                reset_nav_state(state)
-                reset_pan_state(state)
+                if hand_count == 2:
+                    reset_pointer_state(state)
+                    reset_nav_state(state)
+                    reset_pan_state(state)
 
-                hand1 = detected_hands[0]["landmarks"]
-                hand2 = detected_hands[1]["landmarks"]
+                    hand1 = detected_hands[0]["landmarks"]
+                    hand2 = detected_hands[1]["landmarks"]
 
-                hand1_open = is_open_hand(hand1)
-                hand2_open = is_open_hand(hand2)
+                    hand1_open = is_open_hand(hand1)
+                    hand2_open = is_open_hand(hand2)
 
-                hand_distance, c1, c2 = get_two_hand_distance(hand1, hand2, w, h)
-                state["zoom_current_distance"] = hand_distance
+                    hand_distance, c1, c2 = get_two_hand_distance(hand1, hand2, w, h)
+                    state["zoom_current_distance"] = hand_distance
 
-                cv2.line(frame, c1, c2, (255, 0, 255), 2)
-                cv2.circle(frame, c1, 8, (255, 0, 255), -1)
-                cv2.circle(frame, c2, 8, (255, 0, 255), -1)
+                    cv2.line(frame, c1, c2, (255, 0, 255), 2)
+                    cv2.circle(frame, c1, 8, (255, 0, 255), -1)
+                    cv2.circle(frame, c2, 8, (255, 0, 255), -1)
 
-                if hand1_open and hand2_open:
-                    state["zoom_lost_frames"] = 0
-                    state["zoom_ready_frames"] += 1
+                    if hand1_open and hand2_open:
+                        state["zoom_lost_frames"] = 0
+                        state["zoom_ready_frames"] += 1
 
-                    if state["zoom_ready_frames"] >= ZOOM_ENTER_STABLE_FRAMES:
-                        if not state["zoom_active"]:
-                            state["zoom_active"] = True
-                            state["mode"] = MODE_ZOOM
-                            state["zoom_baseline_distance"] = hand_distance
-                            state["zoom_previous_distance"] = hand_distance
-                            state["last_command_text"] = "ZOOM_READY"
-                            if not state["zoom_mouse_primed"]:
-                                prime_zoom_target(screen_center_x, screen_center_y)
-                                state["zoom_mouse_primed"] = True
-                        else:
-                            if not state["zoom_mouse_primed"]:
-                                prime_zoom_target(screen_center_x, screen_center_y)
-                                state["zoom_mouse_primed"] = True
-
-                            delta = hand_distance - state["zoom_previous_distance"]
-
-                            if delta > ZOOM_CONTINUOUS_THRESHOLD:
-                                state["last_command_text"] = "ZOOM_IN"
-                                state["test_box_size"] = clamp(
-                                    state["test_box_size"] + abs(delta) * 0.35,
-                                    TEST_BOX_MIN_SIZE,
-                                    TEST_BOX_MAX_SIZE,
-                                )
-                                if state["scroll_cooldown"] == 0:
-                                    pyautogui.scroll(SCROLL_STEP)
-                                    state["scroll_cooldown"] = SCROLL_COOLDOWN_FRAMES
-
-                            elif delta < -ZOOM_CONTINUOUS_THRESHOLD:
-                                state["last_command_text"] = "ZOOM_OUT"
-                                state["test_box_size"] = clamp(
-                                    state["test_box_size"] - abs(delta) * 0.35,
-                                    TEST_BOX_MIN_SIZE,
-                                    TEST_BOX_MAX_SIZE,
-                                )
-                                if state["scroll_cooldown"] == 0:
-                                    pyautogui.scroll(-SCROLL_STEP)
-                                    state["scroll_cooldown"] = SCROLL_COOLDOWN_FRAMES
-
+                        if state["zoom_ready_frames"] >= ZOOM_ENTER_STABLE_FRAMES:
+                            if not state["zoom_active"]:
+                                state["zoom_active"] = True
+                                state["mode"] = MODE_ZOOM
+                                state["zoom_baseline_distance"] = hand_distance
+                                state["zoom_previous_distance"] = hand_distance
+                                state["last_command_text"] = "ZOOM_READY"
+                                if not state["zoom_mouse_primed"]:
+                                    prime_zoom_target(screen_center_x, screen_center_y)
+                                    state["zoom_mouse_primed"] = True
                             else:
-                                state["last_command_text"] = "ZOOM_HOLD"
+                                if not state["zoom_mouse_primed"]:
+                                    prime_zoom_target(screen_center_x, screen_center_y)
+                                    state["zoom_mouse_primed"] = True
 
-                            state["zoom_previous_distance"] = hand_distance
+                                delta = hand_distance - state["zoom_previous_distance"]
+
+                                if delta > ZOOM_CONTINUOUS_THRESHOLD:
+                                    state["last_command_text"] = "ZOOM_IN"
+                                    state["test_box_size"] = clamp(
+                                        state["test_box_size"] + abs(delta) * 0.35,
+                                        TEST_BOX_MIN_SIZE,
+                                        TEST_BOX_MAX_SIZE,
+                                    )
+                                    if state["scroll_cooldown"] == 0:
+                                        pyautogui.scroll(SCROLL_STEP)
+                                        state["scroll_cooldown"] = SCROLL_COOLDOWN_FRAMES
+
+                                elif delta < -ZOOM_CONTINUOUS_THRESHOLD:
+                                    state["last_command_text"] = "ZOOM_OUT"
+                                    state["test_box_size"] = clamp(
+                                        state["test_box_size"] - abs(delta) * 0.35,
+                                        TEST_BOX_MIN_SIZE,
+                                        TEST_BOX_MAX_SIZE,
+                                    )
+                                    if state["scroll_cooldown"] == 0:
+                                        pyautogui.scroll(-SCROLL_STEP)
+                                        state["scroll_cooldown"] = SCROLL_COOLDOWN_FRAMES
+                                else:
+                                    state["last_command_text"] = "ZOOM_HOLD"
+
+                                state["zoom_previous_distance"] = hand_distance
+                        else:
                             state["mode"] = MODE_ZOOM
+                            state["last_command_text"] = "ZOOM_STABILIZING"
+
                     else:
-                        state["mode"] = MODE_NONE
-                        state["last_command_text"] = "ZOOM_ARMING"
-                else:
-                    if state["zoom_active"]:
                         state["zoom_lost_frames"] += 1
                         state["mode"] = MODE_ZOOM
-                        state["last_command_text"] = "ZOOM_GRACE"
 
                         if state["zoom_lost_frames"] > ZOOM_LOST_TOLERANCE_FRAMES:
                             reset_zoom_state(state)
                             state["mode"] = MODE_NONE
                             state["last_command_text"] = "ZOOM_STOP"
-                    else:
-                        reset_zoom_state(state)
-                        state["mode"] = MODE_NONE
-                        state["last_command_text"] = "TWO_HANDS_NOT_OPEN"
+                        else:
+                            state["last_command_text"] = "ZOOM_GRACE"
 
-            elif hand_count == 1:
-                reset_zoom_state(state)
-                state["zoom_current_distance"] = None
+                elif hand_count == 1:
+                    reset_zoom_state(state)
+                    state["zoom_current_distance"] = None
 
-                current_hand = detected_hands[0]
-                hand_landmarks = current_hand["landmarks"]
-                hand_label = current_hand["label"]
+                    current_hand = detected_hands[0]
+                    hand_landmarks = current_hand["landmarks"]
+                    hand_label = current_hand["label"]
 
-                index_tip = get_index_tip(hand_landmarks, w, h)
-                hand_center = get_hand_center(hand_landmarks, w, h)
-                hand_state = detect_hand_state(hand_landmarks)
-                open_hand_valid = is_open_hand(hand_landmarks)
+                    index_tip = get_index_tip(hand_landmarks, w, h)
+                    hand_center = get_hand_center(hand_landmarks, w, h)
+                    hand_state = detect_hand_state(hand_landmarks)
+                    open_hand_valid = is_open_hand(hand_landmarks)
 
-                cv2.circle(frame, index_tip, INDEX_TIP_MARKER_RADIUS, (0, 255, 0), -1)
-                cv2.circle(frame, hand_center, 6, (255, 255, 0), -1)
+                    cv2.circle(frame, index_tip, INDEX_TIP_MARKER_RADIUS, (0, 255, 0), -1)
+                    cv2.circle(frame, hand_center, 6, (255, 255, 0), -1)
 
-                pointer_pose_valid = hand_label == "Right" and is_pointer_pose_stronger(hand_landmarks, w, h)
-                nav_pose_valid = open_hand_valid and not pointer_pose_valid
-                fist_pose_valid = hand_state == "FIST"
+                    pointer_pose_valid = hand_label == "Right" and is_pointer_pose_stronger(hand_landmarks, w, h)
+                    nav_pose_valid = open_hand_valid and not pointer_pose_valid
+                    fist_pose_valid = hand_state == "FIST"
 
-                if pointer_pose_valid:
-                    reset_nav_state(state)
-                    reset_pan_state(state)
+                    if pointer_pose_valid:
+                        reset_nav_state(state)
+                        reset_pan_state(state)
 
-                    state["pointer_lost_frames"] = 0
-                    state["mode"] = MODE_POINTER
-                    state["pointer_active"] = True
+                        state["pointer_lost_frames"] = 0
+                        state["mode"] = MODE_POINTER
+                        state["pointer_active"] = True
 
-                    target_x = clamp(index_tip[0], box_x1, box_x2)
-                    target_y = clamp(index_tip[1], box_y1, box_y2)
+                        target_x = clamp(index_tip[0], box_x1, box_x2)
+                        target_y = clamp(index_tip[1], box_y1, box_y2)
 
-                    mouse_target_x = clamp(index_tip[0] / w * screen_w, 0, screen_w - 1)
-                    mouse_target_y = clamp(index_tip[1] / h * screen_h, 0, screen_h - 1)
+                        mouse_target_x = clamp(index_tip[0] / w * screen_w, 0, screen_w - 1)
+                        mouse_target_y = clamp(index_tip[1] / h * screen_h, 0, screen_h - 1)
 
-                    if not state["pointer_initialized"]:
-                        state["pointer_initialized"] = True
-                        state["pointer_preview_x"] = target_x
-                        state["pointer_preview_y"] = target_y
-                        state["smoothed_cursor_x"] = target_x
-                        state["smoothed_cursor_y"] = target_y
-                        state["mouse_cursor_x"] = mouse_target_x
-                        state["mouse_cursor_y"] = mouse_target_y
-                        state["dwell_anchor_x"] = mouse_target_x
-                        state["dwell_anchor_y"] = mouse_target_y
-                        state["dwell_counter"] = 0
-                        pyautogui.moveTo(int(mouse_target_x), int(mouse_target_y), duration=0)
-                        state["last_command_text"] = "POINTER_READY"
-                    else:
-                        lag_distance = distance(
-                            (state["pointer_preview_x"], state["pointer_preview_y"]),
-                            (target_x, target_y),
-                        )
-
-                        if lag_distance > POINTER_SNAP_DISTANCE:
+                        if not state["pointer_initialized"]:
+                            state["pointer_initialized"] = True
+                            state["pointer_preview_x"] = target_x
+                            state["pointer_preview_y"] = target_y
                             state["smoothed_cursor_x"] = target_x
                             state["smoothed_cursor_y"] = target_y
-                        else:
-                            state["smoothed_cursor_x"] = (
-                                state["smoothed_cursor_x"] * (1 - POINTER_DIRECT_SMOOTHING)
-                                + target_x * POINTER_DIRECT_SMOOTHING
-                            )
-                            state["smoothed_cursor_y"] = (
-                                state["smoothed_cursor_y"] * (1 - POINTER_DIRECT_SMOOTHING)
-                                + target_y * POINTER_DIRECT_SMOOTHING
-                            )
-
-                        state["pointer_preview_x"] = clamp(state["smoothed_cursor_x"], box_x1, box_x2)
-                        state["pointer_preview_y"] = clamp(state["smoothed_cursor_y"], box_y1, box_y2)
-
-                        mouse_lag = distance(
-                            (state["mouse_cursor_x"], state["mouse_cursor_y"]),
-                            (mouse_target_x, mouse_target_y),
-                        )
-
-                        if mouse_lag > MOUSE_POINTER_SNAP_DISTANCE:
                             state["mouse_cursor_x"] = mouse_target_x
                             state["mouse_cursor_y"] = mouse_target_y
-                        else:
-                            state["mouse_cursor_x"] = (
-                                state["mouse_cursor_x"] * (1 - MOUSE_POINTER_SMOOTHING)
-                                + mouse_target_x * MOUSE_POINTER_SMOOTHING
-                            )
-                            state["mouse_cursor_y"] = (
-                                state["mouse_cursor_y"] * (1 - MOUSE_POINTER_SMOOTHING)
-                                + mouse_target_y * MOUSE_POINTER_SMOOTHING
-                            )
-
-                        pyautogui.moveTo(
-                            int(state["mouse_cursor_x"]),
-                            int(state["mouse_cursor_y"]),
-                            duration=0,
-                        )
-                        state["last_command_text"] = "POINTER_MOVE"
-
-                        current_cursor = (state["mouse_cursor_x"], state["mouse_cursor_y"])
-                        dwell_anchor = (state["dwell_anchor_x"], state["dwell_anchor_y"])
-
-                        if distance(current_cursor, dwell_anchor) <= DWELL_RADIUS_PIXELS:
-                            if state["click_cooldown"] == 0:
-                                state["dwell_counter"] += 1
-                            else:
-                                state["dwell_counter"] = 0
-                        else:
-                            state["dwell_anchor_x"] = state["mouse_cursor_x"]
-                            state["dwell_anchor_y"] = state["mouse_cursor_y"]
+                            state["dwell_anchor_x"] = mouse_target_x
+                            state["dwell_anchor_y"] = mouse_target_y
                             state["dwell_counter"] = 0
-
-                        if (
-                            state["dwell_counter"] >= DWELL_FRAMES_REQUIRED
-                            and state["click_cooldown"] == 0
-                        ):
-                            state["last_command_text"] = "DWELL_CLICK"
-                            state["click_cooldown"] = CLICK_COOLDOWN_FRAMES
-                            state["click_flash_frames"] = CLICK_FLASH_FRAMES
-                            pyautogui.click(button="left")
-                            state["dwell_counter"] = 0
-                            state["dwell_anchor_x"] = state["mouse_cursor_x"]
-                            state["dwell_anchor_y"] = state["mouse_cursor_y"]
-
-                elif state["pan_active"]:
-                    reset_pointer_state(state)
-
-                    if open_hand_valid:
-                        reset_pan_state(state)
-                        state["mode"] = MODE_NAV
-                        state["last_command_text"] = "PAN_EXIT_OPEN_HAND"
-                    else:
-                        state["mode"] = MODE_PAN
-
-                        if fist_pose_valid:
-                            state["pan_lost_frames"] = 0
+                            pyautogui.moveTo(int(mouse_target_x), int(mouse_target_y), duration=0)
+                            state["last_command_text"] = "POINTER_READY"
                         else:
-                            state["pan_lost_frames"] += 1
+                            lag_distance = distance(
+                                (state["pointer_preview_x"], state["pointer_preview_y"]),
+                                (target_x, target_y),
+                            )
 
-                        if state["pan_lost_frames"] > PAN_LOST_TOLERANCE_FRAMES:
-                            reset_pan_state(state)
-                            state["mode"] = MODE_NAV if state["nav_active"] else MODE_NONE
-                            state["last_command_text"] = "PAN_STOP"
-                        else:
-                            if not state["pan_initialized"]:
-                                state["pan_initialized"] = True
-                                state["pan_anchor_hand"] = hand_center
-
-                                pyautogui.moveTo(screen_center_x, screen_center_y, duration=0)
-                                pyautogui.mouseDown(button="middle")
-
-                                state["mouse_dragging"] = True
-                                state["last_command_text"] = "PAN_READY_CENTER"
+                            if lag_distance > POINTER_SNAP_DISTANCE:
+                                state["smoothed_cursor_x"] = target_x
+                                state["smoothed_cursor_y"] = target_y
                             else:
-                                dx = hand_center[0] - state["pan_anchor_hand"][0]
-                                dy = hand_center[1] - state["pan_anchor_hand"][1]
+                                state["smoothed_cursor_x"] = (
+                                    state["smoothed_cursor_x"] * (1 - POINTER_DIRECT_SMOOTHING)
+                                    + target_x * POINTER_DIRECT_SMOOTHING
+                                )
+                                state["smoothed_cursor_y"] = (
+                                    state["smoothed_cursor_y"] * (1 - POINTER_DIRECT_SMOOTHING)
+                                    + target_y * POINTER_DIRECT_SMOOTHING
+                                )
 
-                                if abs(dx) < PAN_DEADZONE:
-                                    dx = 0
-                                if abs(dy) < PAN_DEADZONE:
-                                    dy = 0
+                            state["pointer_preview_x"] = clamp(state["smoothed_cursor_x"], box_x1, box_x2)
+                            state["pointer_preview_y"] = clamp(state["smoothed_cursor_y"], box_y1, box_y2)
 
-                                if dx != 0 or dy != 0:
-                                    state["test_box_center_x"] += dx * PAN_SCALE_X
-                                    state["test_box_center_y"] += dy * PAN_SCALE_Y
+                            mouse_lag = distance(
+                                (state["mouse_cursor_x"], state["mouse_cursor_y"]),
+                                (mouse_target_x, mouse_target_y),
+                            )
 
-                                    move_x = int(dx * PAN_SCALE_X)
-                                    move_y = int(dy * PAN_SCALE_Y)
-                                    pyautogui.moveRel(move_x, move_y, duration=0)
+                            if mouse_lag > MOUSE_POINTER_SNAP_DISTANCE:
+                                state["mouse_cursor_x"] = mouse_target_x
+                                state["mouse_cursor_y"] = mouse_target_y
+                            else:
+                                state["mouse_cursor_x"] = (
+                                    state["mouse_cursor_x"] * (1 - MOUSE_POINTER_SMOOTHING)
+                                    + mouse_target_x * MOUSE_POINTER_SMOOTHING
+                                )
+                                state["mouse_cursor_y"] = (
+                                    state["mouse_cursor_y"] * (1 - MOUSE_POINTER_SMOOTHING)
+                                    + mouse_target_y * MOUSE_POINTER_SMOOTHING
+                                )
 
-                                state["pan_anchor_hand"] = hand_center
+                            pyautogui.moveTo(
+                                int(state["mouse_cursor_x"]),
+                                int(state["mouse_cursor_y"]),
+                                duration=0,
+                            )
+                            state["last_command_text"] = "POINTER_MOVE"
 
-                                if fist_pose_valid:
-                                    state["last_command_text"] = f"PAN ({int(dx)}, {int(dy)})"
+                            current_cursor = (state["mouse_cursor_x"], state["mouse_cursor_y"])
+                            dwell_anchor = (state["dwell_anchor_x"], state["dwell_anchor_y"])
+
+                            if distance(current_cursor, dwell_anchor) <= DWELL_RADIUS_PIXELS:
+                                if state["click_cooldown"] == 0:
+                                    state["dwell_counter"] += 1
                                 else:
-                                    state["last_command_text"] = f"PAN_GRACE ({int(dx)}, {int(dy)})"
-
-                elif nav_pose_valid:
-                    reset_pointer_state(state)
-                    reset_pan_state(state)
-
-                    state["nav_active"] = True
-                    state["nav_lost_frames"] = 0
-                    state["mode"] = MODE_NAV
-                    state["last_command_text"] = "NAV_READY"
-
-                elif state["nav_active"] and fist_pose_valid:
-                    reset_pointer_state(state)
-
-                    state["pan_lost_frames"] = 0
-                    state["mode"] = MODE_PAN
-                    state["pan_active"] = True
-
-                    if not state["pan_initialized"]:
-                        state["pan_initialized"] = True
-                        state["pan_anchor_hand"] = hand_center
-
-                        pyautogui.moveTo(screen_center_x, screen_center_y, duration=0)
-                        pyautogui.mouseDown(button="middle")
-
-                        state["mouse_dragging"] = True
-                        state["last_command_text"] = "PAN_READY_CENTER"
-                    else:
-                        dx = hand_center[0] - state["pan_anchor_hand"][0]
-                        dy = hand_center[1] - state["pan_anchor_hand"][1]
-
-                        if abs(dx) < PAN_DEADZONE:
-                            dx = 0
-                        if abs(dy) < PAN_DEADZONE:
-                            dy = 0
-
-                        if dx != 0 or dy != 0:
-                            state["test_box_center_x"] += dx * PAN_SCALE_X
-                            state["test_box_center_y"] += dy * PAN_SCALE_Y
-
-                            move_x = int(dx * PAN_SCALE_X)
-                            move_y = int(dy * PAN_SCALE_Y)
-                            pyautogui.moveRel(move_x, move_y, duration=0)
-
-                        state["pan_anchor_hand"] = hand_center
-                        state["last_command_text"] = f"PAN ({int(dx)}, {int(dy)})"
-
-                else:
-                    if state["pointer_active"]:
-                        state["pointer_lost_frames"] += 1
-                        state["mode"] = MODE_POINTER
-                        state["last_command_text"] = "POINTER_GRACE"
-
-                        if state["pointer_lost_frames"] > POINTER_LOST_TOLERANCE_FRAMES:
-                            reset_pointer_state(state)
-                            state["mode"] = MODE_NONE
-                            if hand_label != "Right":
-                                state["last_command_text"] = "LEFT_HAND_ONLY"
+                                    state["dwell_counter"] = 0
                             else:
-                                state["last_command_text"] = "NO_POINTER_POSE"
+                                state["dwell_anchor_x"] = state["mouse_cursor_x"]
+                                state["dwell_anchor_y"] = state["mouse_cursor_y"]
+                                state["dwell_counter"] = 0
+
+                            if (
+                                state["dwell_counter"] >= DWELL_FRAMES_REQUIRED
+                                and state["click_cooldown"] == 0
+                            ):
+                                state["last_command_text"] = "DWELL_CLICK"
+                                state["click_cooldown"] = CLICK_COOLDOWN_FRAMES
+                                state["click_flash_frames"] = CLICK_FLASH_FRAMES
+                                pyautogui.click(button="left")
+                                state["dwell_counter"] = 0
+                                state["dwell_anchor_x"] = state["mouse_cursor_x"]
+                                state["dwell_anchor_y"] = state["mouse_cursor_y"]
 
                     elif state["pan_active"]:
-                        state["pan_lost_frames"] += 1
-                        state["mode"] = MODE_PAN
-                        state["last_command_text"] = "PAN_GRACE"
+                        reset_pointer_state(state)
 
-                        if state["pan_lost_frames"] > PAN_LOST_TOLERANCE_FRAMES:
+                        if open_hand_valid:
                             reset_pan_state(state)
-                            state["mode"] = MODE_NAV if state["nav_active"] else MODE_NONE
-                            state["last_command_text"] = "PAN_STOP"
+                            state["mode"] = MODE_NAV
+                            state["last_command_text"] = "PAN_EXIT_OPEN_HAND"
+                        else:
+                            state["mode"] = MODE_PAN
 
-                    elif state["nav_active"]:
-                        state["nav_lost_frames"] += 1
+                            if fist_pose_valid:
+                                state["pan_lost_frames"] = 0
+                            else:
+                                state["pan_lost_frames"] += 1
+
+                            if state["pan_lost_frames"] > PAN_LOST_TOLERANCE_FRAMES:
+                                reset_pan_state(state)
+                                state["mode"] = MODE_NAV if state["nav_active"] else MODE_NONE
+                                state["last_command_text"] = "PAN_STOP"
+                            else:
+                                if not state["pan_initialized"]:
+                                    state["pan_initialized"] = True
+                                    state["pan_anchor_hand"] = hand_center
+
+                                    pyautogui.moveTo(screen_center_x, screen_center_y, duration=0)
+                                    pyautogui.mouseDown(button="middle")
+
+                                    state["mouse_dragging"] = True
+                                    state["last_command_text"] = "PAN_READY_CENTER"
+                                else:
+                                    dx = hand_center[0] - state["pan_anchor_hand"][0]
+                                    dy = hand_center[1] - state["pan_anchor_hand"][1]
+
+                                    if abs(dx) < PAN_DEADZONE:
+                                        dx = 0
+                                    if abs(dy) < PAN_DEADZONE:
+                                        dy = 0
+
+                                    if dx != 0 or dy != 0:
+                                        state["test_box_center_x"] += dx * PAN_SCALE_X
+                                        state["test_box_center_y"] += dy * PAN_SCALE_Y
+
+                                        move_x = int(dx * PAN_SCALE_X)
+                                        move_y = int(dy * PAN_SCALE_Y)
+                                        pyautogui.moveRel(move_x, move_y, duration=0)
+
+                                    state["pan_anchor_hand"] = hand_center
+
+                                    if fist_pose_valid:
+                                        state["last_command_text"] = f"PAN ({int(dx)}, {int(dy)})"
+                                    else:
+                                        state["last_command_text"] = f"PAN_GRACE ({int(dx)}, {int(dy)})"
+
+                    elif nav_pose_valid:
+                        reset_pointer_state(state)
+                        reset_pan_state(state)
+
+                        state["nav_active"] = True
+                        state["nav_lost_frames"] = 0
                         state["mode"] = MODE_NAV
-                        state["last_command_text"] = "NAV_GRACE"
+                        state["last_command_text"] = "NAV_READY"
 
-                        if state["nav_lost_frames"] > NAV_LOST_TOLERANCE_FRAMES:
+                    elif state["nav_active"] and fist_pose_valid:
+                        reset_pointer_state(state)
+
+                        state["pan_lost_frames"] = 0
+                        state["mode"] = MODE_PAN
+                        state["pan_active"] = True
+
+                        if not state["pan_initialized"]:
+                            state["pan_initialized"] = True
+                            state["pan_anchor_hand"] = hand_center
+
+                            pyautogui.moveTo(screen_center_x, screen_center_y, duration=0)
+                            pyautogui.mouseDown(button="middle")
+
+                            state["mouse_dragging"] = True
+                            state["last_command_text"] = "PAN_READY_CENTER"
+                        else:
+                            dx = hand_center[0] - state["pan_anchor_hand"][0]
+                            dy = hand_center[1] - state["pan_anchor_hand"][1]
+
+                            if abs(dx) < PAN_DEADZONE:
+                                dx = 0
+                            if abs(dy) < PAN_DEADZONE:
+                                dy = 0
+
+                            if dx != 0 or dy != 0:
+                                state["test_box_center_x"] += dx * PAN_SCALE_X
+                                state["test_box_center_y"] += dy * PAN_SCALE_Y
+
+                                move_x = int(dx * PAN_SCALE_X)
+                                move_y = int(dy * PAN_SCALE_Y)
+                                pyautogui.moveRel(move_x, move_y, duration=0)
+
+                            state["pan_anchor_hand"] = hand_center
+                            state["last_command_text"] = f"PAN ({int(dx)}, {int(dy)})"
+
+                    else:
+                        if state["pointer_active"]:
+                            state["pointer_lost_frames"] += 1
+                            state["mode"] = MODE_POINTER
+                            state["last_command_text"] = "POINTER_GRACE"
+
+                            if state["pointer_lost_frames"] > POINTER_LOST_TOLERANCE_FRAMES:
+                                reset_pointer_state(state)
+                                state["mode"] = MODE_NONE
+                                if hand_label != "Right":
+                                    state["last_command_text"] = "LEFT_HAND_ONLY"
+                                else:
+                                    state["last_command_text"] = "NO_POINTER_POSE"
+
+                        elif state["pan_active"]:
+                            state["pan_lost_frames"] += 1
+                            state["mode"] = MODE_PAN
+                            state["last_command_text"] = "PAN_GRACE"
+
+                            if state["pan_lost_frames"] > PAN_LOST_TOLERANCE_FRAMES:
+                                reset_pan_state(state)
+                                state["mode"] = MODE_NAV if state["nav_active"] else MODE_NONE
+                                state["last_command_text"] = "PAN_STOP"
+
+                        elif state["nav_active"]:
+                            state["nav_lost_frames"] += 1
+                            state["mode"] = MODE_NAV
+                            state["last_command_text"] = "NAV_GRACE"
+
+                            if state["nav_lost_frames"] > NAV_LOST_TOLERANCE_FRAMES:
+                                reset_nav_state(state)
+                                reset_pan_state(state)
+                                state["mode"] = MODE_NONE
+                                state["last_command_text"] = "NAV_STOP"
+
+                        else:
+                            reset_pointer_state(state)
                             reset_nav_state(state)
                             reset_pan_state(state)
                             state["mode"] = MODE_NONE
-                            state["last_command_text"] = "NAV_STOP"
+                            state["last_command_text"] = "NO_ACTIVE_POSE"
 
-                    else:
-                        reset_pointer_state(state)
-                        reset_nav_state(state)
-                        reset_pan_state(state)
-                        state["mode"] = MODE_NONE
-                        state["last_command_text"] = "NO_ACTIVE_POSE"
+                    state["last_index_tip"] = index_tip
 
-                state["last_index_tip"] = index_tip
+                else:
+                    reset_all_modes(state)
 
-            else:
-                reset_all_modes(state)
+                # draw_test_box(frame, state)
+                # draw_overlay(frame, state)
 
-           # draw_test_box(frame, state)
-           # draw_overlay(frame, state)
+                if SHOW_CAMERA:
+                    cv2.imshow("Gesture Test Sandbox", frame)
 
-            cv2.imshow("Gesture Test Sandbox", frame)
+                    key = cv2.waitKey(1) & 0xFF
+                    if key == 27 or key == ord("q"):
+                        RUNNING = False
+                        break
+                else:
+                    time.sleep(0.01)
 
-            key = cv2.waitKey(1) & 0xFF
-            if key == 27 or key == ord("q"):
-                break
+    finally:
+        reset_pan_state(state)
+        cap.release()
+        cv2.destroyAllWindows()
 
-    reset_pan_state(state)
-    cap.release()
-    cv2.destroyAllWindows()
+        if tray_icon is not None:
+            try:
+                tray_icon.stop()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
