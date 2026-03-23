@@ -3,15 +3,15 @@ import mediapipe as mp
 import math
 import pyautogui
 
-from gesture_utils import (
+from .gesture_utils import (
     get_two_hand_distance,
     is_open_hand,
     get_index_tip,
     get_hand_center,
     detect_hand_state,
 )
-from gesture_state import create_state
-from config import (
+from .gesture_state import create_state
+from .config import (
     ZOOM_ENTER_STABLE_FRAMES,
     ZOOM_CONTINUOUS_THRESHOLD,
     ZOOM_LOST_TOLERANCE_FRAMES,
@@ -730,9 +730,6 @@ def main():
 
             else:
                 reset_all_modes(state)
-
-           # draw_test_box(frame, state)
-           # draw_overlay(frame, state)
 
             cv2.imshow("Gesture Test Sandbox", frame)
 
