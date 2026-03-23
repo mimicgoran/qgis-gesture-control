@@ -1,4 +1,4 @@
-opencv-python
-mediapipe
-pyautogui
+opencv-python>=4.8
+mediapipe>=0.10
+pyautogui>=0.9
 
