@@ -1,38 +1,51 @@
 # QGIS Gesture Control
 
-Hand gesture based control system for QGIS navigation using Python.  This project explores hand gesture based interaction as an alternative way to control QGIS navigation, with a focus on accessibility and experimental GIS workflows. Make sure your webcam is connected and QGIS is open.
+A hand gesture based control system for QGIS navigation built with Python.
+
+This project explores gesture based interaction as an alternative input method for GIS workflows, with a focus on usability, stability, and real-world testing inside QGIS.
+
+Make sure your webcam is connected and QGIS is open before running the application.
+
+---
 
 ## Features
 
-- Pointer control
-- Dwell click
-- Pan and zoom
-- Gesture based interaction
+- Pointer control using hand tracking  
+- Dwell click for hands-free interaction  
+- Pan using hand gestures  
+- Zoom using two-hand distance  
+- Gesture-based navigation mode switching  
+- Config-based tuning for interaction behavior  
 
-  ## How it works
+---
 
-The system uses MediaPipe for hand tracking and OpenCV for video processing. 
-Recognized gestures are translated into mouse actions using PyAutoGUI to control QGIS navigation.
+## How it works
 
-Supported interactions include:
-- Pointer movement using index finger
-- Dwell based clicking
-- Pan using closed fist
-- Zoom using two hand distance
+The system uses MediaPipe for hand tracking and OpenCV for video processing. Recognized gestures are translated into mouse actions using PyAutoGUI to control QGIS navigation.
 
-  ## Gesture Controls
+The current implementation operates at the OS level, allowing fast testing and validation of gesture behavior without requiring a native QGIS plugin.
 
-- Open hand → Navigation mode
-- Index finger → Pointer control
-- Closed fist → Pan
-- Two open hands → Zoom in or zoom out based on the distance between hands
+---
+
+## Supported Interactions
+
+- Pointer movement using index finger  
+- Dwell-based clicking  
+- Pan using closed fist  
+- Zoom using distance between two hands  
+
+---
+
+## Gesture Controls
+
+- Open hand → Navigation mode  
+- Index finger → Pointer control  
+- Closed fist → Pan  
+- Two open hands → Zoom in or zoom out based on hand distance  
+
+---
 
 ## Installation
 
+```bash
 pip install -r requirements.txt
-
-## Usage
-
-Run the application:
-
-python src/qgis_gesture_control/main.py
