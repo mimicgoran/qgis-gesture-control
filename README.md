@@ -35,4 +35,4 @@ pip install -r requirements.txt
 
 Run the application:
 
-python -m src.qgis_gesture_control.main
+python src/qgis_gesture_control/main.py
